@@ -2,6 +2,19 @@
 #include <algorithm>
 #include <stdexcept>
 
+template <size_t I, typename... Types>
+struct TypeAtIndex;
+
+template <typename T0, typename... Types>
+struct TypeAtIndex<0, T0, Types...> {
+	using Type = T0;
+};
+
+template <size_t I, typename T0, typename... Types>
+struct TypeAtIndex<I, T0, Types...> {
+	using Type = TypeAtIndex<I - 1, Types...>::Type;
+};
+
 template <typename... Types>
 class Variant final {
 private:
@@ -10,7 +23,7 @@ private:
 
 	char _buffer[_size];
 
-	template <typename T, typename... Types>
+	template <typename T>
 	size_t getTypeIndex() {
 		size_t index = 0;
 
@@ -29,7 +42,7 @@ private:
 
 public:
 	template <typename T>
-	Variant(const T& value) : _index(getTypeIndex<T, Types...>()) {
+	Variant(const T& value) : _index(getTypeIndex<T>()) {
 		new (_buffer) T(value);
 	}
 
@@ -78,9 +91,20 @@ public:
 
 	template<typename T>
 	T& get() {
-		if (getTypeIndex<T, Types...>() != _index) {
+		if (getTypeIndex<T>() != _index) {
 			throw (std::runtime_error("Type not active in variant"));
 		}
+
+		return *reinterpret_cast<T*>(_buffer);
+	}
+
+	template <size_t I>
+	auto& get() {
+		if (I != _index) {
+			throw (std::runtime_error("Type not active in variant"));
+		}
+
+		using T = TypeAtIndex<I, Types...>::Type;
 
 		return *reinterpret_cast<T*>(_buffer);
 	}
