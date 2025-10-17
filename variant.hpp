@@ -1,120 +1,160 @@
-#pragma once
 #include <algorithm>
-#include <stdexcept>
+#include <initializer_list>
+#include <new>
+#include <type_traits>
 
-template <size_t I, typename... Types>
-struct TypeAtIndex;
+template <size_t Index, typename... Types>
+struct TypeAt;
 
-template <typename T0, typename... Types>
-struct TypeAtIndex<0, T0, Types...> {
-	using Type = T0;
+template <size_t Index, typename Head, typename... Tail>
+struct TypeAt<Index, Head, Tail...> {
+	using value = typename TypeAt<Index - 1, Tail...>::value;
 };
 
-template <size_t I, typename T0, typename... Types>
-struct TypeAtIndex<I, T0, Types...> {
-	using Type = TypeAtIndex<I - 1, Types...>::Type;
+template <typename Head, typename... Tail>
+struct TypeAt<0, Head, Tail...> {
+	using value = typename Head;
+};
+
+template <size_t Index>
+struct TypeAt<Index> {
+	static_assert(false, "Type not found");
+};
+
+template <typename Type, typename... Types>
+struct IndexAt;
+
+template <typename Type, typename Head, typename... Tail>
+struct IndexAt<Type, Head, Tail...> {
+	static constexpr size_t value = 1 + IndexAt<Type, Tail...>::value;
+};
+
+template <typename Type, typename... Tail>
+struct IndexAt<Type, Type, Tail...> {
+	static constexpr size_t value = 0;
+};
+
+template <typename Type>
+struct IndexAt<Type> {
+	static_assert(false, "Index not found");
+};
+
+template <typename Type, typename... Types>
+struct Contains;
+
+template <typename Type, typename Head, typename... Types>
+struct Contains<Type, Head, Types...> {
+	static constexpr bool value = Contains<Type, Types...>::value;
+};
+
+template <typename Type, typename... Types>
+struct Contains<Type, Type, Types...> {
+	static constexpr bool value = true;
+};
+
+template <typename Type>
+struct Contains<Type> {
+	static constexpr bool value = false;
 };
 
 template <typename... Types>
 class Variant final {
 private:
+	static constexpr size_t _count = sizeof...(Types);
 	static constexpr size_t _size = std::max({ sizeof(Types)... });
-	size_t _index;
+	static constexpr size_t _align = std::max({ alignof(Types)... });
 
-	char _buffer[_size];
-
-	template <typename T>
-	size_t getTypeIndex() {
-		size_t index = 0;
-
-		for (bool found : { std::is_same_v<T, Types>... }) {
-			if (found) { return index; }
-			++index;
-		}
-
-		throw (std::runtime_error("Type not found in type list"));
-	}
-
-	template <typename T>
-	void destroy(auto* buffer) {
-		reinterpret_cast<T*>(buffer)->~T();
-	}
+	std::aligned_storage<_size, _align> _value;
+	size_t _current;
 
 public:
-	template <typename T>
-	Variant(const T& value) : _index(getTypeIndex<T>()) {
-		new (_buffer) T(value);
+	template<typename Type>
+	explicit Variant(const Type& value) {
+		_current = IndexAt<Type, Types...>::value;
+		new (reinterpret_cast<char*>(&_value)) Type(value);
 	}
 
-	Variant(const Variant& obj) : _index(obj._index) {
+	Variant(const Variant& variant) : _current(variant._current) {
 		size_t index = 0;
-		((index++ == _index ? new (_buffer) Types(*reinterpret_cast<Types*>(obj._buffer)) : void()), ...);
+		char* _ptr = reinterpret_cast<char*>(&_value);
+
+		((index++ == _current ?
+			(new (_ptr) Types(*reinterpret_cast<const Types*>(&variant._value)), void()) :
+			void()),
+			...);
 	}
 
-	Variant(Variant&& obj) : _index(obj._index) {
+	Variant(Variant&& variant) : _current(variant._current) {
 		size_t index = 0;
-		((index++ == _index ? new (_buffer) Types(std::move(*reinterpret_cast<Types*>(obj._buffer))) : void()), ...);
+		char* _ptr = reinterpret_cast<char*>(&_value);
 
-		obj._index = static_cast<size_t>(-1);
+		((index++ == _current ?
+			(new (_ptr) Types(std::move(*reinterpret_cast<Types*>(&variant._value))), void()) :
+			void()),
+			...);
+
+		variant._current = static_cast<size_t>(-1);
+		std::memset(reinterpret_cast<char*>(&_value), 0, _size);
 	}
 
-	~Variant() {
-		size_t index = 0;
-		((index++ == _index ? destroy<Types>(_buffer) : void()), ...);
+	template <size_t Index>
+	auto& get() noexcept {
+		// static_assert(Index == _current, "Invalid index");
+		return *reinterpret_cast<TypeAt<Index, Types...>::value*>(&_value);
 	}
 
-	Variant& operator=(const Variant& obj) {
-		if (this == &obj) { return *this; }
+	template <typename Type>
+	size_t get() const noexcept {
+		size_t index = IndexAt<Type, Types...>::value;
+		// static_assert(index == _current, "Invalid index");
+		return index;
+	}
 
-		this->~Variant();
-		_index = obj._index;
+	template <typename Type>
+	bool holds_alternative() const noexcept {
+		return Contains<Type, Types...>::value;
+	}
+
+	size_t get_index() const noexcept {
+		return _current;
+	}
+
+	Variant& operator=(const Variant& variant) {
+		if (this == &variant) {
+			return *this;
+		}
+
+		_current = variant._current;
 
 		size_t index = 0;
-		((index++ == _index ? new (_buffer) Types(*reinterpret_cast<Types*>(obj._buffer)) : void()), ...);
+		char* _ptr = reinterpret_cast<char*>(&_value);
+
+		((index++ == _current ?
+			(new (_ptr) Types(*reinterpret_cast<const Types*>(&variant._value)), void()) :
+			void()),
+			...);
 
 		return *this;
 	}
 
-	Variant& operator=(Variant&& obj) {
-		if (this == &obj) { return *this; }
+	Variant& operator=(Variant&& variant) {
+		if (this == &variant) {
+			return *this;
+		}
 
-		_index = obj._index;
-		this->~Variant();
+		_current = variant._current;
 
 		size_t index = 0;
-		((index++ == _index ? (new (_buffer) Types(std::move(*reinterpret_cast<Types*>(obj._buffer))), void()) : void()), ...);
+		char* _ptr = reinterpret_cast<char*>(&_value);
 
-		obj._index = static_cast<size_t>(-1);
+		((index++ == _current ?
+			(new (_ptr) Types(std::move(*reinterpret_cast<Types*>(&variant._value))), void()) :
+			void()),
+			...);
+
+		variant._current = static_cast<size_t>(-1);
+		std::memset(reinterpret_cast<char*>(&_value), 0, _size);
 
 		return *this;
-	}
-
-	template<typename T>
-	T& get() {
-		if (getTypeIndex<T>() != _index) {
-			throw (std::runtime_error("Type not active in variant"));
-		}
-
-		return *reinterpret_cast<T*>(_buffer);
-	}
-
-	template <size_t I>
-	auto& get() {
-		if (I != _index) {
-			throw (std::runtime_error("Type not active in variant"));
-		}
-
-		using T = TypeAtIndex<I, Types...>::Type;
-
-		return *reinterpret_cast<T*>(_buffer);
-	}
-
-	template <typename T>
-	bool holdsAlternative() {
-		return (std::is_same_v<T, Types> || ...);
-	}
-
-	size_t getIndex() {
-		return _index;
 	}
 };
