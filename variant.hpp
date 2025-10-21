@@ -70,7 +70,7 @@ public:
 
 	template <typename T>
 	constexpr bool holds_alternative() const noexcept {
-		return contains<T, Args...>::value;
+		return index_of<T, Args...>::value == _curr_type_index;
 	}
 
 	constexpr size_t index() const noexcept {
