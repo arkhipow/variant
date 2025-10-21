@@ -1,159 +1,114 @@
-#include <algorithm>
-#include <initializer_list>
-#include <new>
-#include <type_traits>
+#pragma once
+#include "meta.hpp"
+#include <utility>
 
-template <size_t Index, typename... Types>
-struct TypeAt;
-
-template <size_t Index, typename Head, typename... Tail>
-struct TypeAt<Index, Head, Tail...> {
-	using value = typename TypeAt<Index - 1, Tail...>::value;
-};
-
-template <typename Head, typename... Tail>
-struct TypeAt<0, Head, Tail...> {
-	using value = typename Head;
-};
-
-template <size_t Index>
-struct TypeAt<Index> {
-	static_assert(false, "Type not found");
-};
-
-template <typename Type, typename... Types>
-struct IndexAt;
-
-template <typename Type, typename Head, typename... Tail>
-struct IndexAt<Type, Head, Tail...> {
-	static constexpr size_t value = 1 + IndexAt<Type, Tail...>::value;
-};
-
-template <typename Type, typename... Tail>
-struct IndexAt<Type, Type, Tail...> {
-	static constexpr size_t value = 0;
-};
-
-template <typename Type>
-struct IndexAt<Type> {
-	static_assert(false, "Index not found");
-};
-
-template <typename Type, typename... Types>
-struct Contains;
-
-template <typename Type, typename Head, typename... Types>
-struct Contains<Type, Head, Types...> {
-	static constexpr bool value = Contains<Type, Types...>::value;
-};
-
-template <typename Type, typename... Types>
-struct Contains<Type, Type, Types...> {
-	static constexpr bool value = true;
-};
-
-template <typename Type>
-struct Contains<Type> {
-	static constexpr bool value = false;
-};
-
-template <typename... Types>
-class Variant final {
+template <typename... Args>
+class Variant {
 private:
-	static constexpr size_t _count = sizeof...(Types);
-	static constexpr size_t _size = std::max({ sizeof(Types)... });
-	static constexpr size_t _align = std::max({ alignof(Types)... });
+	static constexpr size_t _max_size = std::max({ sizeof(Args)... });
+	static constexpr size_t _max_align = std::max({ alignof(Args)... });
 
-	std::aligned_storage<_size, _align> _value;
-	size_t _current;
+	size_t _curr_type_index;
+	std::aligned_storage<_max_size, _max_align> _storage;
+
+	template <typename T>
+	void destroy() noexcept {
+		reinterpret_cast<T*>(&_storage)->~T();
+	}
 
 public:
-	template<typename Type>
-	explicit Variant(const Type& value) {
-		_current = IndexAt<Type, Types...>::value;
-		new (reinterpret_cast<char*>(&_value)) Type(value);
+	template <typename T>
+	Variant(const T& value) noexcept {
+		_curr_type_index = index_of<T, Args...>::value;
+
+		char* ptr_storage = reinterpret_cast<char*>(&_storage);
+		new (ptr_storage) T(value);
 	}
 
-	Variant(const Variant& variant) : _current(variant._current) {
-		size_t index = 0;
-		char* _ptr = reinterpret_cast<char*>(&_value);
+	Variant(const Variant& variant) noexcept {
+		_curr_type_index = variant._curr_type_index;
 
-		((index++ == _current ?
-			(new (_ptr) Types(*reinterpret_cast<const Types*>(&variant._value)), void()) :
-			void()),
-			...);
+		size_t index = 0;
+		char* ptr_storage = reinterpret_cast<char*>(&_storage);
+		((index++ == variant._curr_type_index ? (new (ptr_storage) Args(*reinterpret_cast<const Args*>(&variant._storage)), void()) : void()), ...);
 	}
 
-	Variant(Variant&& variant) : _current(variant._current) {
+	Variant(Variant&& variant) noexcept {
+		_curr_type_index = variant._curr_type_index;
+
 		size_t index = 0;
-		char* _ptr = reinterpret_cast<char*>(&_value);
+		char* ptr_storage = reinterpret_cast<char*>(&_storage);
+		((index++ == variant._curr_type_index ? (new (ptr_storage) Args(std::move(*reinterpret_cast<Args*>(&variant._storage))), void()) : void()), ...);
 
-		((index++ == _current ?
-			(new (_ptr) Types(std::move(*reinterpret_cast<Types*>(&variant._value))), void()) :
-			void()),
-			...);
+		variant._curr_type_index = static_cast<size_t>(-1);
+	}
 
-		variant._current = static_cast<size_t>(-1);
-		std::memset(reinterpret_cast<char*>(&_value), 0, _size);
+	~Variant() noexcept {
+		size_t index = 0;
+		((index++ == _curr_type_index ? destroy<Args>() : void()), ...);
+	}
+
+	template <typename T>
+	constexpr auto& get() {
+		if (index_of<T, Args...>::value != _curr_type_index) {
+			throw ("Type is not current");
+		}
+
+		return *reinterpret_cast<T*>(&_storage);
 	}
 
 	template <size_t Index>
-	auto& get() noexcept {
-		// static_assert(Index == _current, "Invalid index");
-		return *reinterpret_cast<TypeAt<Index, Types...>::value*>(&_value);
+	constexpr auto& get() {
+		if (Index != _curr_type_index) {
+			throw ("Index is not current");
+		}
+
+		using type = typename type_of<Index, Args...>::type;
+
+		return *reinterpret_cast<type*>(&_storage);
 	}
 
-	template <typename Type>
-	size_t get() const noexcept {
-		size_t index = IndexAt<Type, Types...>::value;
-		// static_assert(index == _current, "Invalid index");
-		return index;
+	template <typename T>
+	constexpr bool holds_alternative() const noexcept {
+		return contains<T, Args...>::value;
 	}
 
-	template <typename Type>
-	bool holds_alternative() const noexcept {
-		return Contains<Type, Types...>::value;
+	constexpr size_t index() const noexcept {
+		return _curr_type_index;
 	}
 
-	size_t get_index() const noexcept {
-		return _current;
-	}
-
-	Variant& operator=(const Variant& variant) {
+	Variant& operator=(const Variant& variant) noexcept {
 		if (this == &variant) {
 			return *this;
 		}
 
-		_current = variant._current;
-
 		size_t index = 0;
-		char* _ptr = reinterpret_cast<char*>(&_value);
+		((index++ == _curr_type_index ? destroy<Args>() : void()), ...);
 
-		((index++ == _current ?
-			(new (_ptr) Types(*reinterpret_cast<const Types*>(&variant._value)), void()) :
-			void()),
-			...);
+		_curr_type_index = variant._curr_type_index;
+
+		index = 0;
+		char* ptr_storage = reinterpret_cast<char*>(&_storage);
+		((index++ == variant._curr_type_index ? (new (ptr_storage) Args(*reinterpret_cast<const Args*>(&variant._storage)), void()) : void()), ...);
 
 		return *this;
 	}
 
-	Variant& operator=(Variant&& variant) {
+	Variant& operator=(Variant&& variant) noexcept {
 		if (this == &variant) {
 			return *this;
 		}
 
-		_current = variant._current;
-
 		size_t index = 0;
-		char* _ptr = reinterpret_cast<char*>(&_value);
+		((index++ == _curr_type_index ? destroy<Args>() : void()), ...);
 
-		((index++ == _current ?
-			(new (_ptr) Types(std::move(*reinterpret_cast<Types*>(&variant._value))), void()) :
-			void()),
-			...);
+		_curr_type_index = variant._curr_type_index;
 
-		variant._current = static_cast<size_t>(-1);
-		std::memset(reinterpret_cast<char*>(&_value), 0, _size);
+		index = 0;
+		char* ptr_storage = reinterpret_cast<char*>(&_storage);
+		((index++ == variant._curr_type_index ? (new (ptr_storage) Args(std::move(*reinterpret_cast<Args*>(&variant._storage))), void()) : void()), ...);
+
+		variant._curr_type_index = static_cast<size_t>(-1);
 
 		return *this;
 	}
