@@ -112,36 +112,26 @@ public:
         return _curr_type_index;
     }
 
-    Variant& operator=(const Variant& variant) noexcept {
-        if (this == &variant) {
-            return *this;
+    Variant& operator=(const Variant& rhs) noexcept {
+        if (this != &rhs) {
+            destroy_by_index<0>();
+
+            _curr_type_index = rhs._curr_type_index;
+            copy<0>(rhs);
         }
-
-        size_t index = 0;
-        ((index++ == _curr_type_index ? destroy<Args>() : void()), ...);
-
-        _curr_type_index = variant._curr_type_index;
-
-        index = 0;
-        ((index++ == variant._curr_type_index ? (new (_storage) Args(*reinterpret_cast<const Args*>(variant._storage)), void()) : void()), ...);
 
         return *this;
     }
 
-    Variant& operator=(Variant&& variant) noexcept {
-        if (this == &variant) {
-            return *this;
+    Variant& operator=(Variant&& rhs) noexcept {
+        if (this != &rhs) {
+            destroy_by_index<0>();
+
+            _curr_type_index = rhs._curr_type_index;
+            move<0>(std::move(rhs));
+
+            rhs._curr_type_index = static_cast<size_t>(-1);
         }
-
-        size_t index = 0;
-        ((index++ == _curr_type_index ? destroy<Args>() : void()), ...);
-
-        _curr_type_index = variant._curr_type_index;
-
-        index = 0;
-        ((index++ == variant._curr_type_index ? (new (_storage) Args(std::move(*reinterpret_cast<Args*>(variant._storage))), void()) : void()), ...);
-
-        variant._curr_type_index = static_cast<size_t>(-1);
 
         return *this;
     }
