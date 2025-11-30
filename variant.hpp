@@ -14,35 +14,45 @@ private:
     alignas(_max_align) char _storage[_max_size];
 
     template <size_t Index>
-    constexpr void copy(const Variant& rhs) {
+    constexpr void copy_impl(const Variant& rhs) {
         if constexpr (Index < _max_count) {
             if (Index == rhs._curr_type_index) {
                 using T = typename type_of<Index, Args...>::type;
+
+                if constexpr (!is_copy_able<T>) {
+                    static_assert(false);
+                }
+
                 new (_storage) T(*reinterpret_cast<const T*>(rhs._storage));
             }
 
             else {
-                copy<Index + 1>(rhs);
+                copy_impl<Index + 1>(rhs);
             }
         }
     }
 
     template <size_t Index>
-    constexpr void move(Variant&& rhs) {
+    constexpr void move_impl(Variant&& rhs) {
         if constexpr (Index < _max_count) {
             if (Index == rhs._curr_type_index) {
                 using T = typename type_of<Index, Args...>::type;
+
+                if constexpr (!is_move_able<T>) {
+                    static_assert(false);
+                }
+
                 new (_storage) T(std::move(*reinterpret_cast<T*>(rhs._storage)));
             }
 
             else {
-                move<Index + 1>(std::move(rhs));
+                move_impl<Index + 1>(std::move(rhs));
             }
         }
     }
 
     template <typename T>
-    constexpr void destroy() noexcept {
+    constexpr void destroy_impl() noexcept {
         reinterpret_cast<T*>(_storage)->~T();
     }
 
@@ -51,7 +61,7 @@ private:
         if constexpr (Index < _max_count) {
             if (Index == _curr_type_index) {
                 using T = typename type_of<Index, Args...>::type;
-                destroy<T>();
+                destroy_impl<T>();
             }
 
             else {
@@ -62,6 +72,7 @@ private:
 
 public:
     template <typename T>
+    requires is_copy_able<T>
     Variant(const T& value) noexcept {
         _curr_type_index = index_of<T, Args...>::value;
         new (_storage) T(value);
@@ -69,14 +80,13 @@ public:
 
     Variant(const Variant& variant) noexcept {
         _curr_type_index = variant._curr_type_index;
-        copy<0>(variant);
+        copy_impl<0>(variant);
     }
 
     Variant(Variant&& variant) noexcept {
         _curr_type_index = variant._curr_type_index;
-        move<0>(std::move(variant));
+        move_impl<0>(std::move(variant));
         
-        variant._curr_type_index = static_cast<size_t>(-1);
     }
 
     ~Variant() noexcept {
@@ -117,7 +127,7 @@ public:
             destroy_by_index<0>();
 
             _curr_type_index = rhs._curr_type_index;
-            copy<0>(rhs);
+            copy_impl<0>(rhs);
         }
 
         return *this;
@@ -128,9 +138,8 @@ public:
             destroy_by_index<0>();
 
             _curr_type_index = rhs._curr_type_index;
-            move<0>(std::move(rhs));
+            move_impl<0>(std::move(rhs));
 
-            rhs._curr_type_index = static_cast<size_t>(-1);
         }
 
         return *this;
