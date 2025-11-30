@@ -38,3 +38,14 @@ template <size_t Index>
 struct type_of<Index> {
 	static_assert(false, "Type not found");
 };
+
+
+
+template<typename T>
+concept is_move_able = std::is_move_constructible_v<T>;
+
+template<typename T>
+concept is_copy_able = std::is_copy_constructible_v<T>;
+
+template<typename T, typename... Args>
+concept contains = (std::is_same_v<T, Args> || ...);
